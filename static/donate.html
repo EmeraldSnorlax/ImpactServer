@@ -15,6 +15,10 @@
         #amount:before {
             content: '$';
         }
+        .fineprint {
+            font-family: serif;
+            font-size: 0.9em;
+        }
     </style>
 
     <!-- Dependencies -->
@@ -51,32 +55,51 @@
         </nav>
     </div>
 </header>
- <div class="container">
-    <div class="row">
-        <form class="col s12">
-            <div class="row">
-                <br><br>
-                <div class="input-field col s9 push-l3">
-                    Donations of any size are appreciated! The minimum donation to receive premium features is $5. 
-                </div>
-                <div class="input-field col s3 pull-l9">
-                    <span class="prefix">$</span>
-                    <input id="amount" type="number" data-type="currency" min="0.5" step="0.01" value="5"
-                           pattern="^\$\d{1,3}(,\d{3})*(\.\d+)?$">
-                    <label for="amount" class="active">Amount</label>
-                </div>
-                <div class="range-field col s12">
-                    <input id="amountslider" type="range" min="1" max="100" value="5">
-                </div>
-            </div>
-            <div class="row">
-                <div class="col s12">
-                    <div id="paypal-button-container"></div>
-                </div>
-                <div class="col s12" id="msg">
-                </div>
-            </div>
-        </form>
+ <div class="section container">
+     <div class="row">
+         <div class="col s12 med_text">
+             <p>Thank you for considering donating. Donations of any size are greatly appreciated!</p>
+             <p>
+                 If you donate <i>$5 or more</i> then you can register an Impact Account. This enables you to receive certain perks including
+                 access to <i>nightly builds</i>, <i>in-game perks</i> and an <i>exclusive role</i> in our Discord server.
+             </p>
+         </div>
+         <div class="col s12">
+             <p>If you already have an Impact Account you can login <a href="/account">here</a>.</p>
+             <p>If you'd like to donate again, you should <a href="#" onclick="if (api.isLoggedIn()) {api.logout(); alert('Logged out successfully')} else {alert('You are already logged out')} return false;">logout</a> first.</p>
+             <p>If you have an Impact registration token, you can <a href="/register">register here</a>.</p>
+         </div>
+         <p class="col s12 fineprint">
+             Please note this is not a purchase. Any rewards we offer in return for your donation are at our sole discretion and can be revoked at any time.
+             All rewards require you to setup an Impact Account. If your donation qualifies, you will be able to register an Impact Account after donating.
+             In-game rewards (including <i>access to nightly builds</i>) require that you to link a genuine Minecraft Account.
+             They will only be activate while you are logged into that Minecraft account.
+             Access to Discord related rewards require that you to link your Discord account and that you join our Discord server.
+         </p>
+     </div>
+    <form id="donate" class="row">
+        <div class="input-field col s12 m4 l3">
+            <span class="prefix">$</span>
+            <input id="amount" type="number" data-type="currency" min="0.5" step="0.01" value="5"
+                   pattern="^\$\d{1,3}(,\d{3})*(\.\d+)?$">
+            <label for="amount" class="active">Amount</label>
+        </div>
+        <div class="range-field col m8 l9 hide-on-small-and-down">
+            <input id="amountslider" type="range" min="1" max="100" value="5">
+        </div>
+        <div class="col s12">
+            <div id="paypal-button-container"></div>
+        </div>
+    </form>
+    <div id="confirmation" class="row hidden">
+        <p class="col s12">Thank you for donating <span class="order_amount"></span>!</p>
+        <p class="col s12 msg hidden"></p>
+        <p class="col s12">Your PayPay Order ID is <code class="order_id"></code> and your Order Status is <code class="order_status"></code>.</p>
+        <p class="col s12 fade-in invisible info">
+            Register an Impact Account to receive your rewards
+            <br>
+            Your registration token is <code class="token"></code>. <a href="/register">Click here</a> to use it, or if you prefer you can gift it to a friend.
+        </p>
     </div>
 </div>
 
@@ -182,7 +205,35 @@
         return localStringToNumber(currencyInput.value) >= 5;
     }
 
+    function getAmount(purchase_units) {
+        if (!purchase_units || !Array.isArray(purchase_units)) {
+            throw new Error("getAmount requires an array of purchase_unit objects")
+        }
+
+        var amount = 0;
+        purchase_units.forEach(function (unit) {
+            if (!unit || typeof unit !== "object") {
+                console.error("getAmount contained unrecognised object", unit)
+                return
+            }
+
+            var unit_amount = unit.amount
+            if (!unit_amount || typeof unit_amount !== "object" || unit_amount.currency_code !== "USD" || unit_amount.value || typeof unit_amount.value !== "string") {
+                console.error("getAmount contained unrecognised object", unit)
+                return
+            }
+
+            // This is the only line in this entire thing that does anything, the rest is type-checking!
+            amount += parseFloat(unit_amount.value)
+        })
+
+        return amount
+    }
+
     function createOrder(data, actions) {
+        $("#confirmation").addClass("hidden")
+        $("#confirmation .info").addClass("invisible")
+
         return actions.order.create({
             intent: 'CAPTURE',
             application_context: {
@@ -203,24 +254,43 @@
     }
 
     function onApprove(data, actions) {
+        var conf = $("#confirmation")
+        var info = conf.find(".info")
+        var msg = conf.find(".msg")
+
+        console.log("Approved, about to capture", data)
+
         return actions.order.capture().then(function (details) {
+            // Update user-facing strings
+            conf.find(".order_id").text(details.id)
+            conf.find(".order_amount").text("$" + getAmount(details.purchase_units))
+            conf.find(".order_status").text(details.status)
+
+            conf.removeClass("hidden")
             // Send our server the order ID to get a registration token
             return api.confirmPayment(data.orderID)
                 .then(function(token) {
-                    if (token && token !== "thanks") {
-                        // TODO show "thank you" page with token and link instead
-                        document.location.href='/register.html?token=' + token;
-                    } else {
-                        document.getElementById("msg").innerText = "thanks for the donation.";
+                    msg.text("Donation completed successfully.")
+                    if (token && typeof token === "string" && /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(token)) {
+                        info.find(".token").text(token)
+                        info.find("a").attr("href", '/register.html?token=' + encodeURIComponent(token))
+                        info.removeClass("invisible")
                     }
+                    msg.removeClass("hidden")
                 })
                 .catch(function (error) {
-                    document.getElementById("msg").innerText = error;
+                    msg.text("Error processing donation: " + error)
+                    msg.removeClass("hidden")
                 })
+        })
+        .catch(function (error) {
+            msg.text("Error processing donation: " + error)
+            msg.removeClass("hidden")
         })
     }
 
     paypal.Buttons({
+        // TODO on failure?
         createOrder: createOrder,
         onApprove: onApprove
     }).render('#paypal-button-container')
